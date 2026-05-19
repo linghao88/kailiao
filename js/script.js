@@ -1,8 +1,12 @@
-import { sheetLibrary, pipeLibrary, optimizeSheet, optimizePipe } from '../algo/algorithm.js';
+import { sheetLibrary, pipeLibrary, optimizeSheetMultipleStocks, optimizePipeMultipleStocks } from '../algo/algorithm.js';
 
 let currentType = 'sheet';
 let sheetPieces = [];
 let pipePieces = [];
+let customSheetStocks = [...sheetLibrary];
+let customPipeStocks = [...pipeLibrary];
+let customSheetIdStart = 100;
+let customPipeIdStart = 100;
 
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -14,6 +18,55 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.getElementById('stats').style.display = 'none';
     document.getElementById('result-panel').style.display = 'none';
   });
+});
+
+function initStockCheckboxes() {
+  renderSheetStockCheckboxes();
+  renderPipeStockCheckboxes();
+}
+
+function renderSheetStockCheckboxes() {
+  const container = document.getElementById('sheet-stock-checkboxes');
+  container.innerHTML = customSheetStocks.map(stock => `
+    <div class="checkbox-item">
+      <input type="checkbox" id="sheet-stock-${stock.id}" checked>
+      <label for="sheet-stock-${stock.id}">${stock.name}</label>
+    </div>
+  `).join('');
+}
+
+function renderPipeStockCheckboxes() {
+  const container = document.getElementById('pipe-stock-checkboxes');
+  container.innerHTML = customPipeStocks.map(stock => `
+    <div class="checkbox-item">
+      <input type="checkbox" id="pipe-stock-${stock.id}" checked>
+      <label for="pipe-stock-${stock.id}">${stock.name}</label>
+    </div>
+  `).join('');
+}
+
+document.getElementById('add-custom-sheet').addEventListener('click', () => {
+  const w = parseFloat(document.getElementById('custom-sheet-w').value);
+  const h = parseFloat(document.getElementById('custom-sheet-h').value);
+  if (w && h) {
+    customSheetIdStart++;
+    const newStock = { id: customSheetIdStart, name: `自定义 ${w}×${h}`, width: w, height: h };
+    customSheetStocks.push(newStock);
+    renderSheetStockCheckboxes();
+    document.getElementById('custom-sheet-w').value = '';
+    document.getElementById('custom-sheet-h').value = '';
+  }
+});
+
+document.getElementById('add-custom-pipe').addEventListener('click', () => {
+  const l = parseFloat(document.getElementById('custom-pipe-l').value);
+  if (l) {
+    customPipeIdStart++;
+    const newStock = { id: customPipeIdStart, name: `自定义 ${l}mm`, length: l };
+    customPipeStocks.push(newStock);
+    renderPipeStockCheckboxes();
+    document.getElementById('custom-pipe-l').value = '';
+  }
 });
 
 document.getElementById('add-sheet-piece').addEventListener('click', () => {
@@ -69,14 +122,36 @@ document.getElementById('optimize-btn').addEventListener('click', () => {
     return;
   }
   
-  const stockSelect = document.getElementById(`${currentType}-stock-select`);
-  const kerf = parseFloat(document.getElementById(`${currentType}-kerf`).value) || 0;
-  const library = currentType === 'sheet' ? sheetLibrary : pipeLibrary;
-  const stock = library.find(s => s.id === parseInt(stockSelect.value));
+  let selectedStocks = [];
+  if (currentType === 'sheet') {
+    customSheetStocks.forEach(stock => {
+      const checkbox = document.getElementById(`sheet-stock-${stock.id}`);
+      if (checkbox && checkbox.checked) {
+        selectedStocks.push(stock);
+      }
+    });
+  } else {
+    customPipeStocks.forEach(stock => {
+      const checkbox = document.getElementById(`pipe-stock-${stock.id}`);
+      if (checkbox && checkbox.checked) {
+        selectedStocks.push(stock);
+      }
+    });
+  }
   
-  const results = currentType === 'sheet' 
-    ? optimizeSheet(stock, pieces, kerf)
-    : optimizePipe(stock, pieces, kerf);
+  if (selectedStocks.length === 0) {
+    alert('请至少选择一种原料规格');
+    return;
+  }
+  
+  const kerf = parseFloat(document.getElementById(`${currentType}-kerf`).value) || 0;
+  
+  let results;
+  if (currentType === 'sheet') {
+    results = optimizeSheetMultipleStocks(selectedStocks, pieces, kerf);
+  } else {
+    results = optimizePipeMultipleStocks(selectedStocks, pieces, kerf);
+  }
   
   displayResults(results);
   drawResults(results);
@@ -85,7 +160,15 @@ document.getElementById('optimize-btn').addEventListener('click', () => {
 function displayResults(results) {
   document.getElementById('stats').style.display = 'grid';
   document.getElementById('result-panel').style.display = 'block';
-  document.getElementById('stat-materials').textContent = `${results.usedStock} 块 ${results.stock.name}`;
+  
+  const stockUsage = {};
+  (results.usedStocks || []).forEach(stock => {
+    const key = stock.name;
+    stockUsage[key] = (stockUsage[key] || 0) + 1;
+  });
+  const usageStr = Object.entries(stockUsage).map(([name, count]) => `${name}: ${count}块`).join(', ');
+  
+  document.getElementById('stat-materials').innerHTML = `${results.usedStock} 块<br><small style="font-size: 12px; color: #666">${usageStr}</small>`;
   document.getElementById('stat-utilization').textContent = results.utilization + '%';
   document.getElementById('stat-pieces').textContent = results.totalPieces;
   document.getElementById('stat-waste').textContent = results.waste + '%';
@@ -105,23 +188,27 @@ function drawResults(results) {
 }
 
 function drawSheetResults(ctx, results) {
-  const stockW = results.stock.width;
-  const stockH = results.stock.height;
-  const maxW = 300;
-  const scale = Math.min(maxW / stockW, 180 / stockH);
-  const drawW = stockW * scale;
-  const drawH = stockH * scale;
-  
+  const layouts = results.layouts || [];
   const cols = 3;
   const padding = 25;
-  const cardW = drawW + padding * 2;
-  const cardH = drawH + 60;
+  let x = padding;
+  let y = padding;
+  let maxRowHeight = 0;
   
-  results.layouts.forEach((layout, idx) => {
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const x = col * (cardW + 20) + 30;
-    const y = row * (cardH + 20) + 30;
+  layouts.forEach((layout, idx) => {
+    const stock = layout.stock;
+    const maxW = 300;
+    const scale = Math.min(maxW / stock.width, 180 / stock.height);
+    const drawW = stock.width * scale;
+    const drawH = stock.height * scale;
+    const cardW = drawW + padding * 2;
+    const cardH = drawH + 60;
+    
+    if (x + cardW > canvas.width - padding) {
+      x = padding;
+      y += maxRowHeight + padding;
+      maxRowHeight = 0;
+    }
     
     ctx.fillStyle = '#f5f5f5';
     ctx.strokeStyle = '#ddd';
@@ -133,7 +220,7 @@ function drawSheetResults(ctx, results) {
     
     ctx.fillStyle = '#333';
     ctx.font = '600 14px sans-serif';
-    ctx.fillText(`原料 #${idx + 1}`, x + padding, y + 22);
+    ctx.fillText(`${stock.name} #${idx + 1}`, x + padding, y + 22);
     
     const boardX = x + padding;
     const boardY = y + 38;
@@ -145,7 +232,7 @@ function drawSheetResults(ctx, results) {
     ctx.strokeRect(boardX, boardY, drawW, drawH);
     
     const colors = ['#3498db', '#9b59b6', '#1abc9c', '#f39c12', '#e74c3c'];
-    layout.placed.forEach((p, i) => {
+    (layout.placed || []).forEach((p, i) => {
       const px = boardX + p.x * scale;
       const py = boardY + p.y * scale;
       const pw = p.w * scale;
@@ -164,43 +251,49 @@ function drawSheetResults(ctx, results) {
         ctx.fillText(`${p.w}×${p.h}`, px + pw/2, py + ph/2 + 4);
       }
     });
+    
+    x += cardW + padding;
+    maxRowHeight = Math.max(maxRowHeight, cardH);
   });
 }
 
 function drawPipeResults(ctx, results) {
-  const stockLen = results.stock.length;
-  const maxW = 1000;
-  const scale = Math.min(maxW / stockLen, 0.9);
-  const drawW = stockLen * scale;
-  const drawH = 45;
+  const cuts = results.cuts || [];
+  let y = 30;
   
-  results.cuts.forEach((cut, idx) => {
-    const x = 30;
-    const y = idx * (drawH + 50) + 30;
+  cuts.forEach((cutInfo, idx) => {
+    const stock = cutInfo.stock;
+    const stockLen = stock.length;
+    const maxW = 1000;
+    const scale = Math.min(maxW / stockLen, 0.9);
+    const drawW = stockLen * scale;
+    const drawH = 45;
+    const cardW = drawW + 20;
+    const cardH = drawH + 50;
     
     ctx.fillStyle = '#f5f5f5';
     ctx.strokeStyle = '#ddd';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.roundRect(x - 5, y - 5, drawW + 10, drawH + 40, 8);
+    ctx.roundRect(30 - 5, y - 5, cardW, cardH, 8);
     ctx.fill();
     ctx.stroke();
     
     ctx.fillStyle = '#333';
     ctx.font = '600 14px sans-serif';
-    ctx.fillText(`原料 #${idx + 1}`, x, y + 2);
+    ctx.fillText(`${stock.name} #${idx + 1}`, 30, y + 2);
     
     const pipeY = y + 20;
     
     ctx.fillStyle = '#fff';
     ctx.strokeStyle = '#3498db';
     ctx.lineWidth = 2;
-    ctx.fillRect(x, pipeY, drawW, drawH);
-    ctx.strokeRect(x, pipeY, drawW, drawH);
+    ctx.fillRect(30, pipeY, drawW, drawH);
+    ctx.strokeRect(30, pipeY, drawW, drawH);
     
     const colors = ['#3498db', '#9b59b6', '#1abc9c', '#f39c12', '#e74c3c'];
-    cut.forEach((c, i) => {
-      const cx = x + c.start * scale;
+    (cutInfo.cut || []).forEach((c, i) => {
+      const cx = 30 + c.start * scale;
       const cw = c.length * scale;
       
       ctx.fillStyle = colors[i % colors.length] + '40';
@@ -216,5 +309,9 @@ function drawPipeResults(ctx, results) {
         ctx.fillText(`${c.length}mm`, cx + cw/2, pipeY + drawH/2 + 4);
       }
     });
+    
+    y += cardH + 20;
   });
 }
+
+initStockCheckboxes();

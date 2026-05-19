@@ -108,6 +108,13 @@ body {
   border-color: #3498db;
 }
 
+.checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+
 .btn {
   padding: 8px 16px;
   border: none;
@@ -143,6 +150,11 @@ body {
 
 .btn-danger:hover {
   background: #c0392b;
+}
+
+.btn-small {
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .pieces-list {
